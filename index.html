@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="description" content="一个简单的Pixiv图片代理 根据图片id直接打开Pixiv上的图片">
+        <meta name="keywords" content="Pixiv 图片 反向代理 代理 开源">
+        <meta name="author" content="lrhtony">
+        <link rel="stylesheet" type="text/css" href="src/style.css">
+        <script src="src/index.js"></script>
+        <title>Pixiv图片代理</title>
+    </head>
+    <body>
+        <div class="container mx-auto">
+            <div class="flex flex-col mx-7 mt-32 rounded-xl bg-opacity-70 bg-gray-100 py-2 shadow-lg md:mx-24 lg:mx-52">
+                <h1 class="font-extrabold text-3xl text-center md:text-5xl">Pixiv图片代理</h1>
+                <form autocomplete="off" class="self-center">
+                    <input  class="rounded-full text-center bg-opacity-0 px-2 my-1 text-blue-600 font-extrabold md:px-10 md:text-lg lg:text-xl lg:px-8" type="text" name="pid" maxlength="10" placeholder="pid...">
+                </form>
+            </div>
+            <div class="bg-gray-100 rounded-xl bg-opacity-70 px-6 py-10 mt-36 mr-7 ml-7 shadow-lg md:mx-24 lg:mx-52">
+                <h2 class="text-xl font-extrabold md:text-2xl lg:text-3xl">使用说明：</h2>
+                <p class="">
+                    使用上方输入框进行跳转<br>
+                    或者直接使用链接：<br>
+                    https://pixiv.shojo.cn/[pid]<br>
+                    https://pixiv.shojo.cn/[pid]-[序号]<br>
+                    未指定序号时默认为第一张
+                </p>
+                <h3 class="text-lg font-extrabold md:text-xl">例子：</h3>
+                <p class="">
+                    城管浮尸图<a href="https://pixiv.shojo.cn/34844544" target="_blank" rel="nofollow" class="hover:text-sky-500">https://pixiv.shojo.cn/34844544</a>
+                </p>
+            </div>
+            <div class="rounded-xl bg-gray-100 bg-opacity-70 mt-12 mx-7 shadow-lg md:mx-24 lg:mx-52">
+                <p class="text-center text-gray-600 text-sm">Powered by <a href="https://vercel.com" target="_blank" rel="nofollow" class="hover:text-sky-500">Vercel</a> & <a href="https://www.mongodb.com/" target="_blank" rel="nofollow" class="hover:text-sky-500">MongoDB</a></p>
+                <p class="text-center text-gray-600 text-sm">背景图来自 <a href="https://img.paulzzh.com/" target="_blank" rel="nofollow" class="hover:text-sky-500">paulzzh</a></p>
+                <p class="text-center text-gray-600 text-sm"><a href="https://github.com/lrhtony/pixiv" target="_blank" rel="nofollow" class="hover:text-sky-500">©lrhtony</a>|2022|<a href="https://github.com/lrhtony/pixiv/issues/new" target="_blank" rel="nofollow" class="hover:text-sky-500">反馈建议</a></p>
+            </div>
+        </div>
+    </body>
+</html>
