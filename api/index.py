@@ -58,7 +58,7 @@ def main(image_id):
     except ValueError:
         return "请求格式错误", 404  # 输入参数错误
     print('[Request_Args]', pixiv_id, illust_index)
-    thread_get_pixiv_token = threading.Thread(target=get_pixiv_token, args=(access_token))
+    thread_get_pixiv_token = threading.Thread(target=get_pixiv_token, args=(access_token,))
     thread_get_pixiv_token.start()
     thread_get_pixiv_token.join()  # 剩下没有缓存的情况
     illust = get_illust(pixiv_id, access_token['value'])
