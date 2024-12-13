@@ -1,12 +1,35 @@
 {
   "cleanUrls": true,
   "redirects": [
-    {"source": "/", "has": [{"type": "query", "key": "pid", "value": "(?<pid>.*)"}], "destination": "/:pid", "permanent": true}
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "query",
+          "key": "pid",
+          "value": "(?<pid>.*)"
+        }
+      ],
+      "destination": "/:pid",
+      "permanent": true
+    }
   ],
   "rewrites": [
-    {"source": "/", "destination": "/index.html"},
-    {"source": "/favicon.ico", "destination": "/favicon.ico"},
-    {"source": "/src/(.*)", "destination": "/src/$1"},
-    {"source": "/(.*)", "destination": "/api"}
+    {
+      "source": "/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/favicon.ico",
+      "destination": "/favicon.ico"
+    },
+    {
+      "source": "/src/(.*)",
+      "destination": "/src/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/api+cahe"
+    }
   ]
 }
