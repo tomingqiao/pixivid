@@ -31,5 +31,11 @@
       "source": "/(.*)",
       "destination": "/api"
     }
-  ]
+  ],
+  "functions": {
+    "api/*.py": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  }
 }
