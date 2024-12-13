@@ -40,8 +40,6 @@ limiter = Limiter(
                      "connectTimeoutMS": 100000}
 )
 
-main_client=''
-
 if app.config['USE_CACHE']: 
     main_client = pymongo.MongoClient(app.config['MONGO_URI'], tlsCAFile=certifi.where())  # 只构建一个client
 
@@ -56,7 +54,6 @@ referrerPolicy="no-referrer" height="300" width="300"></p> <h2>更多信息</h2>
 def main(image_id):
     access_token = {}
     illust = {}
-    use_cache=app.config['USE_CACHE']
 
     # 解析并验证 image_id 参数
     pixiv_data = parse_image_id(image_id)
@@ -65,14 +62,14 @@ def main(image_id):
     pixiv_id, illust_index = pixiv_data
     print('[Request_Args]', pixiv_id, illust_index)
 
-    if use_cache:  
+    if app.config['USE_CACHE']:  
         thread_get_illust_cache = threading.Thread(target=get_illust_cache, args=(main_client, pixiv_id, illust))
         thread_get_illust_cache.start()
     
     thread_get_pixiv_token = threading.Thread(target=get_pixiv_token, args=(main_client, access_token))
     thread_get_pixiv_token.start()
 
-    if use_cache: 
+    if app.config['USE_CACHE']: 
         thread_get_illust_cache.join()
         print('[Illust_Cache]', illust)
         if illust['cache']:  # 如果存在缓存
@@ -80,7 +77,7 @@ def main(image_id):
             return response
         
     thread_get_pixiv_token.join()  # 剩下没有缓存的情况
-    if use_cache and app.config['USE_CACHE']:  # 如果刷新了token
+    if access_token['refresh'] and app.config['USE_CACHE']:  # 如果刷新了token
         thread_save_pixiv_token = threading.Thread(target=save_pixiv_token, args=(main_client, access_token,))
         thread_save_pixiv_token.start()
 
@@ -101,7 +98,39 @@ def parse_image_id(image_id):
     except (ValueError, IndexError):
         return None
 
+
+@app.route('/purge/<image_id>')
+def purge_cache(image_id):
+    if not app.config['USE_CACHE']:  
+        return '缓存未启用', 404
+
+    try:  # 输入参数处理
+        pixiv_id = int(image_id)
+    except ValueError:
+        return "请求格式错误", 404  # 输入参数错误
+    purge_method = request.args.get('method')
+    db = main_client['cache']
+    if purge_method is None or purge_method == 'expire':
+        result = db['illust'].find_one_and_update({'pid': pixiv_id}, {'$set': {'expire': datetime.utcnow()}})
+        if result is None:
+            return '缓存不存在', 404
+        else:
+            return '已提交清除缓存请求，请1分钟后再试', 200
+    elif purge_method == 'delete':
+        result = db['illust'].find_one_and_delete({'pid': pixiv_id})
+        if result is None:
+            return '缓存不存在', 404
+        else:
+            return '已清除缓存', 200
+    else:
+        return '未知方法', 404
+
+
 def get_illust_cache(client, pid: int, illust: dict):
+    if not app.config['USE_CACHE']:  # 如果禁用缓存，则直接跳过缓存读取
+        illust['cache'] = False
+        return
+
     db = client['cache']
     result = db['illust'].find_one_and_update({"pid": pid}, {
         "$set": {"expireAt": datetime.utcnow() + timedelta(seconds=app.config['CACHE_EXPIRE_TIME'])}})
@@ -159,8 +188,9 @@ def get_pixiv_token(client, access_token: dict):
 
 
 def save_pixiv_token(client, access_token):
-    db = client['secrets']
-    db['pixiv'].update_one({"key": "PIXIV_ACCESS_TOKEN"}, {"$set": {"value": access_token['value'],
+    if app.config['USE_CACHE']:
+        db = client['secrets']
+        db['pixiv'].update_one({"key": "PIXIV_ACCESS_TOKEN"}, {"$set": {"value": access_token['value'],
                                                                     "expireAt": access_token['expireAt']}}, upsert=True)
 
 
@@ -217,6 +247,9 @@ def get_illust(pid: int, access_token: str):
 
 
 def save_illust_cache(client, illust):
+    if not app.config['USE_CACHE']:  # 如果禁用缓存，则跳过保存缓存的步骤
+        return
+
     db = client['cache']
     if illust['type'] == 0:  # type为0时存入cache
         db['illust'].update_one({"pid": illust['pid']}, {"$set": {'pid': illust['pid'],
