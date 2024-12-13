@@ -33,6 +33,9 @@
     }
   ],
   "function": {
-    "api+cache/index.py": {}
+    "api+cache/index.py": {
+      "memory": 1024,
+      "maxDuration": 10
+    }
   }
 }
