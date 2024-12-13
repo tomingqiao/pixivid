@@ -29,7 +29,7 @@
     },
     {
       "source": "/(.*)",
-      "destination": "/api+cache/index.py"
+      "destination": "/api+cahe"
     }
   ]
 }
