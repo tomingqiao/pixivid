@@ -32,7 +32,10 @@
       "destination": "/api+cache"
     }
   ],
-  "function": {
-    "api+cache/index.py": {}
-  }
+  "builds": [
+    {
+      "src": "api+cache/index.py",
+      "use": "@vercel/python"
+    }
+  ]
 }
