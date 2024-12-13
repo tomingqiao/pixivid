@@ -29,7 +29,13 @@
     },
     {
       "source": "/(.*)",
-      "destination": "/api+cache/index.py"
+      "destination": "/api+cache"
+    }
+  ],
+  "builds": [
+    {
+      "src": "api+cache/index.py",
+      "use": "@vercel/python"
     }
   ]
 }
