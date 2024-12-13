@@ -13,10 +13,13 @@ from flask_limiter.util import get_remote_address
 app = Flask(__name__)
 app.config.update(  # Vercel部署时使用
     PIXIV_REFRESH_TOKEN=os.getenv('PIXIV_REFRESH_TOKEN'),
+    MONGO_URI=os.getenv('MONGO_URI'),
     PROXY_HOST=os.getenv('PROXY_HOST'),
     RATE_LIMIT=os.getenv('RATE_LIMIT', '30 per minute'),
     R18_LIMIT=json.loads(os.getenv('R18_LIMIT', 'False').lower()),
-    PROXY=json.loads(os.getenv('PROXY', '{}'))
+    CACHE_EXPIRE_TIME=int(os.getenv('CACHE_EXPIRE_TIME', '259200')),
+    PROXY=json.loads(os.getenv('PROXY', '{}')),
+    USE_CACHE=json.loads(os.getenv('USE_CACHE', 'False').lower())
 )
 # app.config.update(  # 本地测试用
 #     PIXIV_REFRESH_TOKEN='',
@@ -32,9 +35,13 @@ limiter = Limiter(
     app,
     key_func=get_remote_address,
     default_limits=[app.config['RATE_LIMIT']],
-
+    storage_uri=app.config['MONGO_URI'],
+    storage_options={"tlsCAFile": certifi.where(), "serverSelectionTimeoutMS": 100000, "socketTimeoutMS": 100000,
+                     "connectTimeoutMS": 100000}
 )
 
+if app.config['USE_CACHE']: 
+    main_client = pymongo.MongoClient(app.config['MONGO_URI'], tlsCAFile=certifi.where())  # 只构建一个client
 
 R18_TEMPLATE = '''<!DOCTYPE html> <html lang="zh"> <head> <meta charset="UTF-8"> <meta name="viewport" 
 content="width=device-width, initial-scale=1.0"> <title>该图片已被屏蔽</title> <head> <body> <h1>该图片已被屏蔽</h1> 
@@ -47,47 +54,145 @@ referrerPolicy="no-referrer" height="300" width="300"></p> <h2>更多信息</h2>
 def main(image_id):
     access_token = {}
     illust = {}
-    pixiv_path = os.path.splitext(image_id)[0]  # 分割提取pid和序号
-    pixiv_path_spilt = pixiv_path.split('-', 1)  # 从-分开形成列表，前者为pixiv_id，后者为索引
-    try:
-        pixiv_id = int(pixiv_path_spilt[0])
-        if len(pixiv_path_spilt) != 1:
-            illust_index = int(pixiv_path_spilt[1])
-        else:
-            illust_index = 1
-    except ValueError:
-        return "请求格式错误", 404  # 输入参数错误
+
+    # 解析并验证 image_id 参数
+    pixiv_data = parse_image_id(image_id)
+    if not pixiv_data:
+        return "请求格式错误", 404
+    pixiv_id, illust_index = pixiv_data
     print('[Request_Args]', pixiv_id, illust_index)
-    thread_get_pixiv_token = threading.Thread(target=get_pixiv_token, args=(access_token,))
+
+    if app.config['USE_CACHE']:  
+        thread_get_illust_cache = threading.Thread(target=get_illust_cache, args=(main_client, pixiv_id, illust))
+        thread_get_illust_cache.start()
+    
+    thread_get_pixiv_token = threading.Thread(target=get_pixiv_token, args=(main_client, access_token))
     thread_get_pixiv_token.start()
+
+    if app.config['USE_CACHE']: 
+        thread_get_illust_cache.join()
+        print('[Illust_Cache]', illust)
+        if illust['cache']:  # 如果存在缓存
+            response = return_response(main_client, illust, illust_index)
+            return response
+        
     thread_get_pixiv_token.join()  # 剩下没有缓存的情况
+    if access_token['refresh'] and app.config['USE_CACHE']:  # 如果刷新了token
+        thread_save_pixiv_token = threading.Thread(target=save_pixiv_token, args=(main_client, access_token,))
+        thread_save_pixiv_token.start()
+
     illust = get_illust(pixiv_id, access_token['value'])
-    response = return_response(illust, illust_index)
+    response = return_response(main_client, illust, illust_index)
     return response
 
+def parse_image_id(image_id):
+    """
+    解析并验证 image_id 格式，返回 pixiv_id 和 illust_index。
+    """
+    try:
+        pixiv_path = os.path.splitext(image_id)[0]
+        pixiv_path_split = pixiv_path.split('-', 1)
+        pixiv_id = int(pixiv_path_split[0])
+        illust_index = int(pixiv_path_split[1]) if len(pixiv_path_split) > 1 else 1
+        return pixiv_id, illust_index
+    except (ValueError, IndexError):
+        return None
 
 
-def get_pixiv_token(access_token: dict):
+@app.route('/purge/<image_id>')
+def purge_cache(image_id):
+    if not app.config['USE_CACHE']:  
+        return '缓存未启用', 404
+
+    try:  # 输入参数处理
+        pixiv_id = int(image_id)
+    except ValueError:
+        return "请求格式错误", 404  # 输入参数错误
+    purge_method = request.args.get('method')
+    db = main_client['cache']
+    if purge_method is None or purge_method == 'expire':
+        result = db['illust'].find_one_and_update({'pid': pixiv_id}, {'$set': {'expire': datetime.utcnow()}})
+        if result is None:
+            return '缓存不存在', 404
+        else:
+            return '已提交清除缓存请求，请1分钟后再试', 200
+    elif purge_method == 'delete':
+        result = db['illust'].find_one_and_delete({'pid': pixiv_id})
+        if result is None:
+            return '缓存不存在', 404
+        else:
+            return '已清除缓存', 200
+    else:
+        return '未知方法', 404
+
+
+def get_illust_cache(client, pid: int, illust: dict):
+    if not app.config['USE_CACHE']:  # 如果禁用缓存，则直接跳过缓存读取
+        illust['cache'] = False
+        return
+
+    db = client['cache']
+    result = db['illust'].find_one_and_update({"pid": pid}, {
+        "$set": {"expireAt": datetime.utcnow() + timedelta(seconds=app.config['CACHE_EXPIRE_TIME'])}})
+    if result is None:
+        illust['cache'] = False  # cache无结果，标记
+    else:
+        if result['type'] == 0:
+            illust.update({
+                'cache': True,
+                'pid': result['pid'],
+                'type': 0,
+                'images_url': result['images_url'],
+                'sanity_level': result['sanity_level']
+            })
+
+
+def get_pixiv_token(client, access_token: dict):
     refresh_token = app.config['PIXIV_REFRESH_TOKEN']
+    # 如果启用缓存，尝试从数据库中获取 token
+    if app.config['USE_CACHE']:  
+        db = client['secrets']
+        result = db['pixiv'].find_one({"key": "PIXIV_ACCESS_TOKEN"})
+        print('[Token_Cache]', result)
 
-    response = requests.post(  # 刷新token
-            "https://oauth.secure.pixiv.net/auth/token",
-            data={
-                "client_id": "MOBrBDS8blbauoSck0ZfDbtuzpyT",
-                "client_secret": "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj",
-                "grant_type": "refresh_token",
-                "include_policy": "true",
-                "refresh_token": refresh_token,
-            },
-            headers={"User-Agent": "PixivAndroidApp/5.0.234 (Android 11; Pixel 5)"}, proxies=app.config['PROXY']
-        )
+        if result:  # 如果找到缓存
+            access_token['value'] = result['value']
+            access_token['expireAt'] = result['expireAt']
+
+            # 判断是否过期
+            if access_token['expireAt'] - 500 >= datetime.now().timestamp():
+                access_token['refresh'] = False  # 未过期
+                return
+
+    # 如果未启用缓存或缓存已过期，则刷新 token
+    response = requests.post(
+        "https://oauth.secure.pixiv.net/auth/token",
+        data={
+            "client_id": "MOBrBDS8blbauoSck0ZfDbtuzpyT",
+            "client_secret": "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj",
+            "grant_type": "refresh_token",
+            "include_policy": "true",
+            "refresh_token": refresh_token,
+        },
+        headers={"User-Agent": "PixivAndroidApp/5.0.234 (Android 11; Pixel 5)"}, proxies=app.config['PROXY']
+    )
+
+    # 处理刷新后的 token
     data = response.json()
     print('[Token_Refresh]', data)
     access_token.update({
-            'value': data['access_token'],
-            'expireAt': round(datetime.now().timestamp()) + 3600,
-            'refresh': True
-        })
+        'value': data['access_token'],
+        'expireAt': round(datetime.now().timestamp()) + 3600,
+        'refresh': True
+    })
+
+
+def save_pixiv_token(client, access_token):
+    if app.config['USE_CACHE']:
+        db = client['secrets']
+        db['pixiv'].update_one({"key": "PIXIV_ACCESS_TOKEN"}, {"$set": {"value": access_token['value'],
+                                                                    "expireAt": access_token['expireAt']}}, upsert=True)
+
 
 def get_illust(pid: int, access_token: str):
     illust = {}
@@ -140,8 +245,32 @@ def get_illust(pid: int, access_token: str):
             }
         return illust
 
-def return_response(illust, illust_index):
+
+def save_illust_cache(client, illust):
+    if not app.config['USE_CACHE']:  # 如果禁用缓存，则跳过保存缓存的步骤
+        return
+
+    db = client['cache']
+    if illust['type'] == 0:  # type为0时存入cache
+        db['illust'].update_one({"pid": illust['pid']}, {"$set": {'pid': illust['pid'],
+                                                                  'type': illust['type'],
+                                                                  'images_url': illust['images_url'],
+                                                                  'sanity_level': illust['sanity_level'],
+                                                                  'expireAt': datetime.utcnow() + timedelta(
+                                                                      seconds=app.config['CACHE_EXPIRE_TIME'])}}, upsert=True)
+    elif illust['type'] == 404:  # type为404时存入cache
+        db['illust'].update_one({"pid": illust['pid']}, {"$set": {'pid': illust['pid'],
+                                                                  'type': illust['type'],
+                                                                  'message': illust['message'],
+                                                                  'expireAt': datetime.utcnow() + timedelta(
+                                                                      seconds=app.config['CACHE_EXPIRE_TIME'])}}, upsert=True)
+
+
+def return_response(client, illust, illust_index):
     if illust['type'] == 0:
+        if not illust['cache'] and app.config['USE_CACHE']:  # 只有在启用缓存时才保存缓存
+            thread_save_illust_cache = threading.Thread(target=save_illust_cache, args=(client, illust,))
+            thread_save_illust_cache.start()
         if len(illust['images_url']) >= illust_index:  # 如果索引在范围内
             img_url = illust['images_url'][illust_index - 1]
             sanity_level = illust['sanity_level']
@@ -159,7 +288,7 @@ def return_response(illust, illust_index):
         else:  # 索引超出范围
             return make_response('超过该id图片数量上限', 404)
     elif illust['type'] == 404:
-        return make_response('该图片不存在，或者缓存未刷新', 404)
+        return make_response('该图片不存在', 404)
     elif illust['type'] == 500:
         return make_response('当前请求过多，请稍后再试', 500)
 
